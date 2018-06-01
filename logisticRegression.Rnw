@@ -1,0 +1,499 @@
+\documentclass[12pt,authoryear,review]{elsarticle}
+
+\addtolength{\voffset}{-2.5cm}
+\addtolength{\hoffset}{-1.5cm}
+\addtolength{\textwidth}{3cm}
+\addtolength{\textheight}{4cm}
+\linespread{1.1}
+\setlength{\parskip}{14pt}
+
+\usepackage{dsfont}
+\usepackage{mathrsfs}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{color}
+\usepackage{extarrows}
+\usepackage{float}
+\usepackage{bigstrut,multirow,rotating}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+% modified footer
+\makeatletter
+\def\ps@pprintTitle{%
+ \let\@oddhead\@empty
+ \let\@evenhead\@empty
+ \def\@oddfoot{\hfill \emph{February 28, 2014}}%
+ \let\@evenfoot\@oddfoot}
+\makeatother
+
+\newcommand{\vx}{{\mathbf x}}
+\newcommand{\PP}{{\mathbb P}}
+\newcommand{\EE}{{\mathbb E}}
+\newcommand{\vbeta}{{\boldsymbol \beta}}
+
+\begin{document}
+
+\begin{frontmatter}
+		
+		\title {\textbf{Credit Scoring via Logistic Regression}\tnoteref{t1} }				
+		
+		\tnotetext[t1]{This work is based on a problem posed in Chapter 6 of \cite{agresti2003categorical} modified by \href{http://www.utstat.utoronto.ca/reid/}{Prof. Nancy Reid} for the Winter 2014 session of the Methods of Applied Statistics II course at the University of Toronto.}
+		
+		
+		\author{Ali Al-Aradi}
+		\address{Department of Statistical Sciences, University of Toronto, Toronto, Canada}
+
+		\begin{abstract}
+	    The goal of credit scoring models is to predict the creditworthiness of a customer and determine whether they will be able to meet a given financial obligation or default on it. Such models allow a financial institution to minimize the risk of loss by setting decision rules regarding which customers receive loan and credit card approvals. Logistic regression can be used to predict default events and model the influence of different variables on a consumer's creditworthiness. In this paper we use a logistic regression model to predict the creditworthiness of bank customers using predictors related to their personal status and financial history. Model adequacy and robustness checks are performed to ensure that the model is being properly fitted and interpreted.
+	  \end{abstract}
+		
+	\end{frontmatter}
+
+\section{Introduction}
+
+Logistic regression is one of the most important models for categorical response data. It is an example of a generalized linear model whose main use is to estimate the probability that a binary response occurs based on a number of predictor variables. Logistic regression is used in a wide variety of applications including biomedical studies, social science research, marketing as well as financial applications. One example of the latter is the use of binary logistic regression models for credit-scoring, that is: modeling the probability that a customer is creditworthy (i.e. able to meet a financial obligation in a timely manner) using a number of predictors. These predictors can include the size of the loan as well as other personal information such as the customer's annual income, occupation, other outstanding debts, their past default behavior and their credit history.
+
+In this paper, we use a data set that includes 20 covariates for 1000 observations (loan applicants) to build a model for creditworthiness. The model allows us to identify the variables most strongly associated with a customer's credit score. The conclusions are then presented in the form of a report to the bank manager which would help them assess loan applications based on the applicant's profile to decide whether to proceed with loan approval or not. 
+
+\section{Data and Preprocessing}
+
+<<data,echo=FALSE,warning=FALSE,message=FALSE,results='hide'>>=
+# load required libraries 
+library(knitr)
+library(plyr)
+library(multcomp)
+library(ResourceSelection)
+library(glmmBUGS)
+library(boot)
+
+# display 3 significant figures
+options(digits = 3)
+
+# read data, extract required predictors and response, and name the variables
+creditData = read.table("german.data.txt",header=F)
+creditData = creditData[,c(1,2,3,4,9,21)];
+names(creditData) = c("checking","duration","history","purpose","genderStatus","quality")
+
+# change response variables to {0,1} instead of {1,2} 
+creditData$quality[creditData$quality == 2] = 0;
+
+
+# rename categories for convenience
+creditData$checking = revalue(creditData$checking, c("A11"="_<0",
+                                                     "A12"="_0to200",
+                                                     "A13"="_>200",
+                                                     "A14"="_none"))
+
+creditData$history = revalue(creditData$history, c("A30"="_allPaid",
+                                                   "A31"="_atBankPaid",                                                   
+                                                   "A32"="_existingPaid",
+                                                   "A33"="_pastDelay",
+                                                   "A34"="_critical"))
+
+creditData$purpose = revalue(creditData$purpose, c("A40"="_newCar",
+                                                   "A41"="_usedCar",
+                                                   "A42"="_furniture",
+                                                   "A43"="_radio_TV",
+                                                   "A44"="_appliances",
+                                                   "A45"="_repairs",
+                                                   "A46"="_education",
+                                                   "A47"="_vacation",
+                                                   "A48"="_retraining",
+                                                   "A49"="_business",
+                                                   "A410"="_other"))
+creditData$genderStatus = 
+  revalue(creditData$genderStatus, c("A91"="_divorcedMale",
+                                     "A92"="_divorcedMarriedFemale",
+                                     "A93"="_singleMale",
+                                     "A94"="_marriedMale",
+                                     "A95"="_singleFemale"))
+@
+
+The data set used is the German Credit dataset obtained from the \href{ftp://ftp.ics.uci.edu/pub/machine-learning-databases/statlog/german/}{UCI machine-learning data archive} and includes 20 covariates (7 numerical, 13 categorical) and 1000 observations. Each observation represents an individual customer with the response indicating their actual classification (1 = ``Good'' or 2 = ``Bad'') and the covariates indicating various attributes related to the customer's personal or financial information. For the purpose of this paper we will focus on the predictors listed in Table \ref{table:predictors} below. \\ 
+
+\begin{table}[h!] 
+\footnotesize
+\centering
+	\begin{tabular}{ l  l  }  
+		\toprule[1.5pt]
+		\bf{Variable}  & \bf{Possible Values} \\
+		\midrule
+		\textbf{Checking account status} ~~~ & Less than 0 DM (Deutsche Mark)  \\
+										 & between 0 DM and 200 DM  \\
+										 & More than 200 DM/salary assignments for at least 1 year \\
+		\midrule
+		\textbf{Credit duration} 		 & Numerical value in months \\
+		\midrule
+		\textbf{Credit history} & no credits taken/all credits paid back duly  \\
+										 & all credits at this bank paid back duly  \\
+										 & existing credits paid back duly till now \\
+										 & delay in paying off in the past \\
+										 & critical account/other credits existing (not at this bank) \\
+		\midrule
+		\textbf{Intended use} & Car (new) \\
+							  & Car (used) \\
+							  & Furniture/equipment \\
+							  & Radio/television \\
+							  & Domestic appliances \\
+							  & Repairs \\
+							  & Education \\
+							  & Vacation  \\
+							  & Retraining \\
+							  & Business \\
+							  & Other \\
+		\midrule
+		\textbf{Marital status and gender} & Divorced/separated male \\
+								 		   & Divorced/separated/married male \\
+								 		   & Single male \\
+								 		   & Married/widowed male \\
+								 		   & Single female \\
+		\bottomrule[1.5pt]	
+	\end{tabular}
+	\caption{List of Predictor Variables}
+	\label{table:predictors}
+\end{table}
+
+\clearpage
+
+First, some minor data preprocessing is done to make the analysis simpler. The required variables are extracted and the covariate values are renamed for ease of interpretation where possible (e.g. instances of ``A91'' are replaced by ``divorcedMale'' to indicate the gender and marital status of the consumer). Also, to ensure that  responses are in the form of binary data, the ``bad'' credit quality responses are changed from 2 to 0 so that success (good credit) is indicated by a value of 1, and the odds we consider are those of being creditworthy, i.e. not defaulting on the loan.
+
+\section{Binary Logistic Model}
+
+<<baseModel,echo=FALSE,results='hide'>>=
+# fit base logistic regression model
+fullModel = glm(quality ~ .,data=creditData,family=binomial(link="logit"))
+
+# fit logistic regression model with alternative link functions
+probitModel  = glm(quality ~ .,data=creditData,family=binomial(link="probit"))
+cloglogModel = glm(quality ~ .,data=creditData,family=binomial(link="cloglog"))
+@
+
+We fit a binary logistic model to the data, using the logit link function. That is, the classification of the $i^{\text{th}}$ customer as good or bad is modeled using a Bernoulli random variable:
+\[ 
+Y_i = 
+\begin{cases} 
+	1 & \text{if the customer is creditworthy} \\ 
+	0 & \text{otherwise}
+\end{cases} 
+\]
+with conditional probabilities $\PP(Y_i = 1 | \vx_i) = \pi_i$ and $\PP(Y_i = 0| \vx_i) = 1-\pi_i$ where $\vx_i$ is a vector of covariates associated with this customer. The conditional expectation is then given by:
+\[ \EE[Y_i | \vx_i] = \pi_i \]
+and this is associated to a linear predictor via the logit function, i.e.
+\[ \text{logit}~ \pi_i = \log \left( \frac{\pi_i}{1- \pi_i} \right) = \vx_i' \vbeta = \eta_i  \] 
+where $\vbeta$ is a vector of parameters that needs to be estimated. The estimation is performed by iterative weighted least squares (IWLS) which is described in more detail in \cite{davison2003statistical}. Note that the conditional joint probability of $Y_1,...,Y_n$ (assuming conditional independence) is:
+\[ \prod_{i=1}^{n} \pi_i^{y_i} (1-\pi_i)^{1-y_i} = \exp \left[ \sum_{i=1}^{n} y_i \log \left( \frac{\pi_i}{1- \pi_i} \right) + \sum_{i=1}^{n} \log(1-\pi_i) \right]   \]
+which implies that this probability distribution is a member of the exponential family.
+
+The choice of link function is motivated mostly by ease of interpretation of model parameters. Additionally, alternative models were fitted using the probit and complementary log-log link functions and the resulting conclusions are similar. It should also be noted that, while aggregation to binomial data is possible, the  binomial denominators of the aggregated data  remain too small for confidence in chi-square asymptotics\footnote{See Section 10.3.2. of \cite{davison2003statistical}.}. This makes it difficult to use usual model adequacy checking procedures, such as looking at residuals and deviance. A possible solution is to further group the covariate data prior to aggregation to achieve a smaller range of covariate patterns, and in turn decrease the instances of small binomial denominators. Since this process involves some loss of information as the covariate patterns become less granular,  the use of aggregated data is deferred to a later section and is used mainly as a robustness check for the results obtained by the binary model. 
+
+\section{Model Adequacy}
+
+<<modelAdequacy,echo=FALSE,warning=FALSE,message=FALSE,results='hide'>>=
+# run non-additivity test
+etaHatSq         = fullModel$linear.predictors^2;
+fullModel_nonadd = glm(quality ~ . + etaHatSq,data=creditData,family=binomial(link="logit"))
+devRed           = fullModel$deviance-fullModel_nonadd$deviance
+nonAddPval       = 1-pchisq(devRed,1)
+
+# run hosmer and lemeshow goodness-of-fit tests
+HLtestStat = hoslem.test(fullModel$y, fitted(fullModel),10)$statistic
+HLpval     = hoslem.test(fullModel$y, fitted(fullModel),10)$p.value
+
+b = NULL
+k = 1;
+for(i in 3:100)
+{b[k] = hoslem.test(fullModel$y, fitted(fullModel),i)$p.value; k=k+1}
+
+# estimate model with outliers removed
+fullModel_outlier = glm(quality ~ .,data=creditData[-c(106,204,736),],family=binomial(link="logit"))
+oldBeta           = fullModel$coefficients["purpose_retraining"]
+largeBeta         = fullModel_outlier$coefficients["purpose_retraining"]
+@
+
+The first test we perform to check the suitability of this model/link is a test of non-additivity, where we compute the fitted linear predictor $\hat{\eta}$, then estimate a second model with $\hat{\eta}^2$ added to the original list of explanatory variables and, finally, test the significance of the deviance reduction. The deviance of the extended model is lower by \Sexpr{devRed}. So, the test statistic for the non-additivity test is $\Sexpr{devRed}$, and this is compared against a $\chi^2_1$ distribution for a p-value of \Sexpr{nonAddPval}. This suggests that there is weak evidence against the model/link.
+
+Since we are working with binary data, the usual model checking procedures such as using the Pearson chi-square statistic or the deviance likelihood ratio test are not informative. So, instead of using these tests or looking at the usual residual plots, we will employ the Hosmer-Lemeshow Test.\footnote{See section 7.5 of \cite{dobson2008introduction}.} The idea is to group observations into $g$ categories (usually taken to be 10) based on fitted probabilities, computing the Pearson chi-squared statistic for the resulting $g \times 2$ contigency table, and using this as a measure of fit by comparing the test statistic to a $\chi^2_{g-2}$ distribution. For this model, the test statistic is \Sexpr{HLtestStat} which gives a p-value of \Sexpr{HLpval}, suggesting that there is little evidence against the model fit.
+
+One matter of concern with the Hosmer-Lemeshow test is that it has been shown to be sensitive to the choice of grouping parameter $g$.\footnote{See \cite{hosmer1997comparison}.} To address this we run the test using values of $g$ from 3 to 100. The smallest p-value we obtain is \Sexpr{min(b)}, which supports our original conclusion regarding model adequacy. Other concerns regarding this test (that are not addressed in this report) include its ineffectiveness at detecting small nonlinear terms in the predictor, interaction effects (both mild and extreme), and  incorrect but symmetric link functions.\footnote{ Ibid.}
+
+Next, we consider the effect of outliers on the model. For this we plot the Cook statistics for each observation to identify outliers in the dataset. We find from Figure \ref{cookPlot} that consumers \#106, \#204 and \#736 appear to be outliers. So, we fit a second model  with these cases excluded to study their impact on the estimation and conclusions. We find that removal of these cases does not lead to noticeable changes in estimated parameters, parameter significance, goodness-of-fit test results, multiple comparisons or any other procedure and its associated conclusions. One exception is the estimated beta associated with the retraining purpose indicator variable. The estimate of this parameter changes from \Sexpr{oldBeta} with the outliers included to \Sexpr{largeBeta} when they are removed. However, in this case one of the removed observations (\#204, the most noticeable outlier) is the only consumer that indicated retraining as their purpose and had bad credit, i.e. the remaining consumers that indicated their purpose to be retraining had good credit. This is what causes the large change in the associated coefficient, but this is not a concern for the model's overall fit or adequacy. At this point we are not concerned with overdispersion, as we are working with binary data where overdispersion is undetectable.
+
+\begin{figure}[t!]
+\centering
+<<outliers,echo=FALSE,fig.width=6, fig.height=6, out.width='.6\\linewidth'>>=
+# plot Cook statistic
+plot(cooks.distance(fullModel),xlab = "Case",ylab="Cook Statistic")
+abline(h=0.02,col=2,lty=2)
+@
+\caption{Cook statistics for each observation}
+\label{cookPlot}
+\end{figure}
+
+\section{Results and Interpretation}
+
+<<results,echo=FALSE,warning=FALSE,message=FALSE,results='hide'>>=
+# look for main effects by removing one variable at a time and re-estimating model
+y = drop1(fullModel, test = "LRT")
+
+# run multiple comparisons
+a = summary(confint(glht(fullModel, mcp(genderStatus="Tukey"))))$confint
+b = summary(confint(glht(fullModel, mcp(checking="Tukey"))))$confint
+c = summary(confint(glht(fullModel, mcp(history="Tukey"))))$confint
+d = summary(confint(glht(fullModel, mcp(purpose="Tukey"))))$confint
+
+durBeta = fullModel$coefficients[5]
+se = sqrt(vcov(summary(fullModel))[5,5])
+
+durL = durBeta-2*se
+durU = durBeta+2*se
+@
+
+The linear predictor of the model we are fitting is given by:
+\begin{align*}
+\eta = \alpha & + \beta_{\text{0-200}} C_{\text{0-200}}
+                + \beta_{\text{moreThan200}} C_{\text{moreThan200}}                
+                + \beta_{\text{none}} C_{\text{none}} \\
+              & + \beta_{\text{atBankPaid}} H_{\text{atBankPaid}}
+                + \beta_{\text{existingPaid}} H_{\text{existingPaid}}                
+                + \beta_{\text{pastDelay}} H_{\text{pastDelay}}                
+                + \beta_{\text{critical}} H_{\text{critical}}\\
+              & + \beta_{\text{divOrMarriedF}} G_{\text{divOrMarriedF}}
+                + \beta_{\text{singleM}} G_{\text{singleM}}                
+                + \beta_{\text{marriedM}} G_{\text{marriedM}}\\                                
+              & + \beta_{\text{usedCar}} P_{\text{usedCar}}
+                + \beta_{\text{other}} P_{\text{other}}                
+                + \beta_{\text{radioTV}} P_{\text{radioTV}}                
+                + \beta_{\text{appliance}} P_{\text{appliance}}                                
+                + \beta_{\text{repairs}} P_{\text{repairs}}\\                
+              & + \beta_{\text{education}} P_{\text{education}}                
+                + \beta_{\text{retrain}} P_{\text{retrain}}                
+                + \beta_{\text{business}} P_{\text{business}}
+\end{align*}
+where the indicators $C_x$, $H_x$, $G_x$, $P_x$ correspond to checking account status, credit history, gender/status or purpose $x$, respectively. Since we are using a logistic regression model with logit link function, the coefficients for each variable can be interpreted in terms of multiplicative factors for the odds of a consumer's creditworthiness, relative to the reference category (reference categories are given in Table \ref{refCat} below). In particular, the creditworthiness of a consumer in category $x$ change by a factor of $e^{\beta_x}$ relative to the reference category after controlling for all other variables. A positive (resp. negative) coefficient indicates greater (resp. smaller) odds of having good credit compared to the reference category. Differences between coefficients of the same variable type can be interpreted in the same manner; as differences in odds of creditworthiness. In particular, the odds of creditworthiness for two consumers in two categories $x$ and $y$ vary by a factor of $e^{\beta_x-\beta_y}$, after controlling for all other variables. \\
+
+\vspace{-0.5cm}
+
+\begin{table}[h] \small
+\begin{center}
+\begin{tabular}{  l  l  }  
+  \toprule[1.5pt]
+  \bf{Variable}  & \bf{Reference Category} \\
+  \midrule
+  Checking account status ~~ & Less than 0 DM \\  
+  Credit history & No credits taken/all credits paid  \\
+  Gender/marital status & Divorced/separated male \\    
+  Purpose & New car \\
+  \bottomrule[1.5pt]  
+\end{tabular}
+\caption{List of Reference Categories}
+\label{refCat}
+\end{center}
+\end{table}
+
+To find which variables explain creditworthiness and in what way, we begin by testing the significance of each group of variables. We do this by running a likelihood ratio test, comparing the full model deviance to a reduced model deviance in which a single group of variables is removed, and comparing this test statistic to a $\chi^2_k$ where $k$ is equal to the number of removed parameters. The findings are summarized in the Table \ref{sigTable}:
+
+\begin{table}[h] \small
+\begin{center}
+\begin{tabular}{  l  c  c  c  c  c  }  
+  \toprule[1.5pt]
+  \bf{Removed Variable}  & \bf{df} & \bf{Deviance} & \bf{AIC} & \bf{LRT Stat} & \bf{p-value}  \\
+  \midrule
+               &                & \Sexpr{y[1,2]} & \Sexpr{y[1,3]} &                &                \\  
+  checking     & \Sexpr{y[2,1]} & \Sexpr{y[2,2]} & \Sexpr{y[2,3]} & \Sexpr{y[2,4]} & \Sexpr{y[2,5]} \\
+  duration     & \Sexpr{y[3,1]} & \Sexpr{y[3,2]} & \Sexpr{y[3,3]} & \Sexpr{y[3,4]} & \Sexpr{y[3,5]} \\
+  history      & \Sexpr{y[4,1]} & \Sexpr{y[4,2]} & \Sexpr{y[4,3]} & \Sexpr{y[4,4]} & \Sexpr{y[4,5]} \\
+  purpose      & \Sexpr{y[5,1]} & \Sexpr{y[5,2]} & \Sexpr{y[5,3]} & \Sexpr{y[5,4]} & \Sexpr{y[5,5]} \\
+  genderStatus & \Sexpr{y[6,1]} & \Sexpr{y[6,2]} & \Sexpr{y[6,3]} & \Sexpr{y[6,4]} & \Sexpr{y[6,5]} \\     \bottomrule[1.5pt]  
+\end{tabular}
+\caption{Tests of Significance for Predictors}
+\label{sigTable}
+\end{center}
+\end{table}
+
+We find that all the predictor variables are significant at the 95\% significance level, so they are all important in determining the consumer's creditworthiness. To find the ways in which different categories relate to one another in terms of odds of creditworthiness, we compute simultaneous 95\% confidence intervals for all contrasts of each group of variables. Table \ref{hypTable} shows the confidence intervals for significant differences.
+
+\vspace{0.5cm}
+
+\begin{table}[h] \small
+\begin{center}
+\begin{tabular}{  l  c  c  c  }  
+  \toprule[1.5pt]
+  \bf{Linear Hypothesis = 0}  & \bf{Lower Bound} & \bf{Estimate} & \bf{Upper Bound} \\
+  \midrule
+  \bf{Credit History} & & & \\
+  $\beta_{\text{critical}}$ & \Sexpr{c[4,2]} & \Sexpr{c[4,1]} & \Sexpr{c[4,3]} \\  
+  $\beta_{\text{critical}}-\beta_{\text{atBankPaid}}$ & \Sexpr{c[7,2]} & \Sexpr{c[7,1]} & \Sexpr{c[7,3]} \\
+  $\beta_{\text{critical}}-\beta_{\text{existingPaid}}$ & \Sexpr{c[9,2]} & \Sexpr{c[9,1]}&\Sexpr{c[9,3]} \\
+  \midrule  
+  \bf{Gender and Marital Status} & & & \\
+  $\beta_{\text{singleM}}-\beta_{\text{divOrMarriedF}}$ & \Sexpr{a[4,2]} & \Sexpr{a[4,1]}&\Sexpr{a[4,3]} \\
+  \midrule  
+  \bf{Checking Account Status} &  &  &  \\
+  $\beta_{\text{0-200}}$ & \Sexpr{b[1,2]} & \Sexpr{b[1,1]} & \Sexpr{b[1,3]} \\
+  $\beta_{\text{moreThan200}}$ & \Sexpr{b[2,2]} & \Sexpr{b[2,1]} & \Sexpr{b[2,3]} \\  
+  $\beta_{\text{none}}$  & \Sexpr{b[3,2]} & \Sexpr{b[3,1]} & \Sexpr{b[3,3]} \\  
+  $\beta_{\text{none}} - \beta_{\text{0-200}}$  & \Sexpr{b[5,2]} & \Sexpr{b[5,1]} & \Sexpr{b[5,3]} \\  
+  \midrule  
+  \bf{Purpose} & & & \\
+  $\beta_{\text{usedCar}}$  & \Sexpr{d[1,2]} & \Sexpr{d[1,1]} & \Sexpr{d[1,3]} \\
+  $\beta_{\text{radioTV}}$   & \Sexpr{d[4,2]} & \Sexpr{d[4,1]} & \Sexpr{d[4,3]} \\
+  $\beta_{\text{education}} - \beta_{\text{usedCar}}$ & \Sexpr{d[15,2]} & \Sexpr{d[15,1]} & \Sexpr{d[15,3]} \\
+  \midrule  
+  \bf{Duration} & & & \\
+  $\beta_{\text{duration}} $ & \Sexpr{durL} & \Sexpr{durBeta} & \Sexpr{durU}\\
+  \bottomrule[1.5pt]    
+\end{tabular}
+\caption{95\% confidence intervals for significant coefficient differences}
+\label{hypTable}
+\end{center}
+\end{table}
+
+From this table we can conclude the following:
+\begin{itemize}
+\item The odds of creditworthiness for a single male are greater than a divorced or married female by a factor of $e^{\beta_{\text{singleM}}-\beta_{\text{divOrMarriedF}}} = \Sexpr{exp(a[4,1])}$. There are no other significant differences between the various gender/status categories, and there is insufficient information to make a general statement on gender/status effect on creditworthiness.
+\item Odds of a consumer's creditworhtiness increase with an increase in the amount in their checking account. In particular, relative to consumers with less than 0 DM in their checking account, odds of creditworthiness for customers with checking accounts with 0-200 DM, more than 200 DM and those with no checking account are greater by factors of $e^{\beta_{\text{0-200}}} = \Sexpr{exp(b[1,1])}$, $e^{\beta_{\text{moreThan200}}} = \Sexpr{exp(b[2,1])}$, and $e^{\beta_{\text{none}}} = \Sexpr{exp(b[3,1])}$ respectively. Moreover, the odds for consumers with no checking account are greater than those in the 0-200DM group by a factor of $e^{\beta_{\text{none}}-\beta_{\text{0-200}}} = \Sexpr{exp(b[5,1])}$. This is partially expected, as customers with more money in their checking accounts would be less likely to default, but it is surprising to see that customers with no checking account being more creditworthy. 
+\item With respect to purpose, the largest difference in odds is between consumers whose purpose was education and those whose purpose was the purchase of a used car; the latter's odds were greater by a factor of $e^{\beta_{\text{usedCar}}-\beta_{\text{education}}} = \Sexpr{exp(-d[15,1])}$. Additionally, customers whose purpose was the purchase of a used car or a radio/TV had greater odds of creditworthiness than those buying a new car by factors of $e^{\beta_{\text{usedCar}}} = \Sexpr{exp(d[1,1])}$ and $e^{\beta_{\text{radioTV}}} = \Sexpr{exp(d[4,1])}$, respectively. Once again there is not enough information to make a general statement on the relation between purpose and creditworthiness.
+\item A one-month increase in duration drops the expected odds of creditworthiness by a factor of $e^{\beta_{\text{duration}}} = \Sexpr{exp(durBeta)}$. This makes sense as a longer loan has a greater chance of defaulting than a shorter one, after controlling for other variables.
+\item Consumers with ``critical'' credit history show large increases in expected odds of creditworthiness. The odds for these customers relative to customers with fully paid credits, fully paid credits at this bank and those with existing credits paid back are greater by factors of $e^{\beta_{\text{critical}}} = \Sexpr{exp(c[4,1])}$, $e^{\beta_{\text{critical}}-\beta_{\text{atBankPaid}}} = \Sexpr{exp(c[7,1])}$, $e^{\beta_{\text{critical}}-\beta_{\text{existingPaid}}} = \Sexpr{exp(c[9,1])}$, respectively. This result is counterintuitive as it suggests that consumers with worse credit history are less likely to default. This might be due to a form of ``bias'' associated with the way loans are issued - the bank may be more stringent when it comes to loaning a consumer with bad credit history, whereas consumers with good credit history do not face the same kind of scrutiny and may end up being issued a loan they eventually cannot repay. An alternative explanation is that there may be a data issue in which the categories were incorrectly labeled. It would be best to be cautious with the interpretation of this result.
+\end{itemize}
+
+\section{Robustness Checks}
+
+<<aggData,echo=FALSE,warning=FALSE,message=FALSE,results='hide'>>=
+# create aggregated data by grouping variables into bins and rename variables
+creditData_agg          = creditData
+creditData_agg$gender   = creditData_agg$genderStatus
+creditData_agg$duration = 
+  cut(creditData_agg$duration,breaks=c(0,24,48,72),labels=c("0-2yr","2-4yr","4-6yr"))
+
+creditData_agg$history  = revalue(creditData_agg$history, c("_allPaid"="_good",
+                                                           "_atBankPaid"="_good",
+                                                           "_existingPaid"="_good",
+                                                           "_pastDelay"="_bad",
+                                                           "_critical"="_bad"))
+
+creditData_agg$genderStatus = 
+  revalue(creditData_agg$genderStatus, c("_divorcedMale"="_divorcedMarried",
+                                         "_divorcedMarriedFemale"="_divorcedMarried",
+                                         "_singleMale"="_single",
+                                         "_marriedMale"="_divorcedMarried",
+                                         "_singleFemale"="_single"))
+
+creditData_agg$gender = 
+  revalue(creditData_agg$gender, c("_divorcedMale"="_male",
+                                   "_divorcedMarriedFemale"="_female",
+                                   "_singleMale"="_male",
+                                   "_marriedMale"="_male",
+                                   "_singleFemale"="_female"))
+
+creditData_agg$purpose = revalue(creditData_agg$purpose, c("_newCar"="_car",
+                                                           "_usedCar"="_car",
+                                                           "_furniture"="_home",
+                                                           "_radio_TV"="_home",
+                                                           "_appliances"="_home",
+                                                           "_repairs"="_home",
+                                                           "_education"="_other",
+                                                           "_vacation"="_other",
+                                                           "_retraining"="_other",
+                                                           "_business"="_other",
+                                                           "_other"="_other"))
+
+names(creditData_agg)[names(creditData_agg) == "genderStatus"] = "status"
+creditData_agg = 
+  binToBinom(creditData_agg$quality, creditData_agg[,c("checking","duration","history","purpose","status","gender")])
+pctAbove5 = length(creditData_agg[creditData_agg$N<5,1])/length(creditData_agg[,1])
+creditData_agg=creditData_agg[c(1:84,86:134),]
+@
+
+<<robust,echo=FALSE,warning=FALSE,message=FALSE>>=
+# estimate model using aggregate data, run non-addivity test, multiple comparisons
+aggModel        = glm(cbind(y,N-y) ~ .,data=creditData_agg,family=binomial(link="logit"))
+etaHatSq_agg    = aggModel$linear.predictors^2;
+aggModel_nonadd = glm(cbind(y,N-y) ~ . + etaHatSq_agg,data=creditData_agg,family=binomial(link="logit"))
+devRed_agg      = aggModel$deviance-aggModel_nonadd$deviance
+nonAddPval_agg  = 1-pchisq(devRed_agg,1)
+
+y = drop1(aggModel, test="LRT")
+mcp1=confint(glht(aggModel, mcp(checking="Tukey")))
+mcp2=confint(glht(aggModel, mcp(duration="Tukey")))
+mcp3=confint(glht(aggModel, mcp(history="Tukey")))
+mcp4=confint(glht(aggModel, mcp(purpose="Tukey")))
+mcp5=confint(glht(aggModel, mcp(gender="Tukey")))
+mcp6=confint(glht(aggModel, mcp(status="Tukey")))
+@
+
+In order to check the robustness of the conclusions made above, an alternative model is fit using aggregated data, to see if the conclusions of these models agree with those of the original model. For the aggregated data, we aggregate the responses to achieve binomal variables. To do this in such a way that the binomial denominators are not too small, we must group some of the predictor variables to reduce the number of covariate patterns. To this end, we have done the following: \vspace{-0.3cm}
+\begin{itemize}
+\item History is defined as ``good'' (all paid/at bank paid/existing paid) and ``bad'' (past delay/critical).
+\item Durations are grouped into 2-year bins (i.e. 0-2, 2-4, or 4-6 years).
+\item Marital status (``divorced/married'' or ``single'') are considered seperately from gender.
+\item Purpose predictors are grouped into ``car'' (for new and used cars), ``home'' (for furniture, appliances, radio/TV and repairs) and ``other'' (for the remaining purposes).
+\end{itemize} \vspace{-0.3cm}
+We find that with this grouping strategy, \Sexpr{round(pctAbove5*100)}\% of covariate patterns have binomial denominators of 5 or more, so we can have more confidence in $\chi^2$ asymptotics. The model appears to be adequate, since the p-value for the non-additivity test is \Sexpr{nonAddPval_agg}, and the deviance is \Sexpr{aggModel$deviance} on \Sexpr{aggModel$df.residual} degrees of freedom, so the p-value for the $\chi^2$ goodness-of-fit test is \Sexpr{1-pchisq(aggModel$deviance,aggModel$df.residual)}. Furthermore, there does not appear to be any indication of overdispersion based on the reisudal deviance. Finally, the diagnostic plots given below indicate reasonable proximity to normality for the residuals and constant variance. Note that one covariate pattern was omitted from the fitted model as it was deemed to be an outlier.
+
+\vspace{0.5cm}
+\begin{figure}[h]
+\centering
+<<aggDiagPlots,echo=FALSE,fig.width=7, fig.height=7, out.width='.7\\linewidth'>>=
+par(mar=c(4,4,.1,.1),cex.lab=.9,cex.axis=.7,mgp=c(2,.7,0),tcl=-.3,las=1)
+glm.diag.plots(aggModel)
+@
+\caption{\small Diagnostic plots for binomial logistic regression model}
+\end{figure}
+
+
+If we test the significance of each of the variables individually for this model with likelihood ratio tests (results in the table below), we find that the results agree with those of the original model. The exceptions are that when gender and status are considered separately, they are not significant variables, and purpose is also insignificant at 95\% significance level. So, there is no difference on average in the odds of creditworthiness for males and females, for single and married/divorced consumers, and for customers whose purpose is ``car'', ``home'' or ``other''. This is not surprising as the first model concluded that there was a difference between only one pair of gender/status groups: single males and divorced/married females, and differences between just three pairs of purposes (used car vs. new car, radio/TV vs. new car, education vs. used car).
+
+\vspace{0.5cm}
+
+\begin{table}[h] \small
+\begin{center}
+\begin{tabular}{  l  c  c  c  c  c  }  
+   \toprule[1.5pt] 
+  \bf{Removed Variable}  & \bf{df} & \bf{Deviance} & \bf{AIC} & \bf{LRT Stat} & \bf{p-value}  \\
+   \midrule
+  none         &                & \Sexpr{y[1,2]} & \Sexpr{y[1,3]} &                &                \\  
+  checking     & \Sexpr{y[2,1]} & \Sexpr{y[2,2]} & \Sexpr{y[2,3]} & \Sexpr{y[2,4]} & \Sexpr{y[2,5]} \\
+  duration     & \Sexpr{y[3,1]} & \Sexpr{y[3,2]} & \Sexpr{y[3,3]} & \Sexpr{y[3,4]} & \Sexpr{y[3,5]} \\
+  history      & \Sexpr{y[4,1]} & \Sexpr{y[4,2]} & \Sexpr{y[4,3]} & \Sexpr{y[4,4]} & \Sexpr{y[4,5]} \\
+  purpose      & \Sexpr{y[5,1]} & \Sexpr{y[5,2]} & \Sexpr{y[5,3]} & \Sexpr{y[5,4]} & \Sexpr{y[5,5]} \\
+  gender       & \Sexpr{y[6,1]} & \Sexpr{y[6,2]} & \Sexpr{y[6,3]} & \Sexpr{y[6,4]} & \Sexpr{y[6,5]} \\    
+  status       & \Sexpr{y[7,1]} & \Sexpr{y[7,2]} & \Sexpr{y[7,3]} & \Sexpr{y[7,4]} & \Sexpr{y[7,5]} \\    
+   \bottomrule[1.5pt]   
+\end{tabular}
+\caption{Tests of Significance for Predictors - Aggregated Data}
+\end{center}
+\end{table}
+
+When considering the significant differences (pairwise comparisons of means using the Tukey approach) between the other categories we find:
+\begin{itemize}
+\item The conclusions for consumers with varying checking account status match those of the first model both directionally, and in terms of magnitude.
+\item Differences between duration groups show a decrease in creditworthiness odds as duration increases, with the largest difference being between the 4-6 year and 0-2 year groups (decrease by a factor of \Sexpr{exp(mcp2$confint[2,1])})
+\item Being in the ``bad'' credit history group increases the odds of creditworthiness by \Sexpr{exp(mcp3$confint[1,1])}
+\end{itemize}
+
+This verifies the robustness of the conclusions of the binary logistic regression model. \\
+
+\section{Conclusions}
+
+The following report summarizes the findings of a statistical analysis conducted to determine the credit-worthiness of consumers based on the consumer's checking account, the duration of the  credit, the consumer's credit history, the intended use for the credit, and the consumer's gender and marital status.
+
+The main findings of the analysis are as follows:
+\begin{itemize}
+\item Odds of a consumer's creditworhtiness increase with an increase in the size of their checking account. In particular, relative to consumers with less than 0 DM in their checking account, odds of creditworthiness for customers with checking accounts with 0-200 DM, more than 200 DM and those with no checking account are greater by factors of $\Sexpr{exp(b[1,1])}$, $\Sexpr{exp(b[2,1])}$, and $\Sexpr{exp(b[3,1])}$, respectively. Moreover, the odds for consumers with no checking account are greater than those in the 0-200DM group by a factor of $\Sexpr{exp(b[5,1])}$. This is partially expected, as customers with larger checking accounts would be less likely to default, but it is surprising to see that customers with no checking account being more creditworthy.
+\item Broadly speaking, when considering gender and marital status separately there are no differences among males and females or among divorced/married and single consumers. There is, however, a difference between divorced/married females and single males: the odds of creditworthiness of the latter group are \Sexpr{exp(a[4,1])} times greater.
+\item Broadly speaking, when the purpose of the credit is grouped into ``car,'' ``home,'' and ``other'' we find no difference in odds of creditworthiness. If we take a more granular view of purpose, we find that the largest difference in odds is between consumers whose purpose was education and those whose purpose was the purchase of a used car; the latter's odds are \Sexpr{exp(-d[15,1])} times greater. Additionally, customers whose purpose was the purchase of a used car or a radio/TV had greater odds of creditworthiness than those buying a new car by factors of \Sexpr{exp(d[1,1])} and \Sexpr{exp(d[4,1])}, respectively.
+\item Increased duration decreases the odds of creditworthiness. In particular, a one-month increase in duration drops the expected odds of creditworthiness by a factor of $\Sexpr{exp(durBeta)}$. This makes sense as a longer loan has a greater chance of defaulting than a shorter one, after controlling for other variables.
+\item  A somewhat counterintuitive result is that consumers with ``critical'' credit history show large increases in expected odds of creditworthiness. The odds for these customers relative to customers with fully paid credits, fully paid credits at this bank and those with existing credits paid back are greater by factors of $\Sexpr{exp(c[4,1])}$, $\Sexpr{exp(c[7,1])}$, $\Sexpr{exp(c[9,1])}$, respectively. The result suggests that consumers with worse credit history are less likely to default. This might be due to a form of ``bias'' associated with the way loans are issued - the bank may be more stringent when it comes to loaning a consumer with bad credit history, whereas consumers with good credit history do not face the same kind of scrutiny and may end up being issued a loan they eventually cannot repay. An alternative explanation is that there may be a data issue in which the categories were incorrectly labeled. It would be best to be cautious with the interpretation of this result.
+\end{itemize}
+
+\section{References}
+
+\bibliography{logisticRegression}
+\bibliographystyle{Chicago}
+
+\end{document}
